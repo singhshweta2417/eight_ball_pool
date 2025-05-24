@@ -21,6 +21,7 @@ dependencies:
   forge2d: ^0.14.0
   flame_forge2d: ^0.19.0+1
   vector_math: ^2.1.4
+  image_sequence_animator: ^2.0.0
 
 dev_dependencies:
   flutter_test:
@@ -37,6 +38,7 @@ flutter:
   assets:
     - assets/
     - assets/images/
+    - assets/guitarSequence/
 
 
 

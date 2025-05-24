@@ -1,6 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application
-        android:label="eight_ball_rummy"
+        android:label="8 Ball Pool"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity

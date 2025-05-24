@@ -10,20 +10,23 @@ class PoolGameScreen extends StatefulWidget {
 }
 
 class PoolGameScreenState extends State<PoolGameScreen> {
-  List<Ball> balls = [];
-  Offset? aimStart;
-  Timer? _timer;
-  bool isPlayerTurn = true;
-  int playerScore = 0;
-  int opponentScore = 0;
-  double tableWidth = 0;
+  List<Ball> balls = []; // Stores all balls on the table
+  Ball? cueBall; // Special reference to the white cue ball
+  Offset? aimStart; // Where aiming starts (touch position)
+  Timer? _timer; // For game animation updates
+  bool isPlayerTurn = true; // Tracks whose turn it is
+  int playerScore = 0; // Player's score
+  int opponentScore = 0; // Computer's score
+  double tableWidth = 0; // Table dimensions
   double tableHeight = 0;
-  final double tableBorderWidth = 30.0;
-  final double pocketRadius = 25.0;
-  List<Offset> pockets = [];
-  List<Offset> trajectoryPoints = [];
+  final double tableBorderWidth = 30.0; // Wooden border size
+  final double pocketRadius = 25.0; // Pocket size
+  List<Offset> pockets = []; // Positions of all 6 pockets
+  List<Offset> trajectoryPoints = []; // For showing shot prediction
+  bool gameInitialized = false; // Tracks if game is ready
   int maxTrajectoryPoints = 20;
-
+  bool showTrackingLine = false;
+  bool hasMoved = false;
   @override
   void initState() {
     super.initState();
@@ -37,56 +40,62 @@ class PoolGameScreenState extends State<PoolGameScreen> {
     tableWidth = size.width - tableBorderWidth * 2;
     tableHeight = size.height - tableBorderWidth * 2;
 
-    // Initialize pocket positions
     pockets = [
-      Offset(tableBorderWidth, tableBorderWidth),
-      Offset(size.width / 2, tableBorderWidth),
-      Offset(size.width - tableBorderWidth, tableBorderWidth),
-      Offset(tableBorderWidth, size.height - tableBorderWidth),
-      Offset(size.width / 2, size.height - tableBorderWidth),
-      Offset(size.width - tableBorderWidth, size.height - tableBorderWidth),
+      Offset(tableBorderWidth, tableBorderWidth),//top 1st
+      Offset(size.width / 14, tableBorderWidth*11),//top 2nd
+      Offset(size.width - tableBorderWidth, tableBorderWidth),//3rd top
+      Offset(tableBorderWidth, size.height - tableBorderWidth*07),//bottom 1st
+      Offset(size.width*0.92, size.height - tableBorderWidth*16),//bottom 2nd
+      Offset(size.width*0.99 - tableBorderWidth, size.height - tableBorderWidth*07),//bottom 3rd
     ];
 
     _initializeBalls();
+    setState(() {
+      gameInitialized = true;
+    });
   }
 
   void _initializeBalls() {
     balls.clear();
 
-    // Cue ball
-    balls.add(
-      Ball(
-        position: Offset(
-          tableBorderWidth + 100,
-          tableHeight / 2 + tableBorderWidth,
-        ),
-        color: Colors.white,
-        isCue: true,
-        number: 0,
+    // Initialize cue ball
+    cueBall = Ball(
+      position: Offset(
+        tableBorderWidth * 4 + 50,
+        tableHeight / 2 + tableBorderWidth,
       ),
+      color: Colors.white,
+      isCue: true,
+      number: 0,
     );
+    balls.add(cueBall!);
 
-    // 15 balls arranged in triangle
-    double startX = tableWidth - 150 + tableBorderWidth;
-    double startY = tableHeight / 2 + tableBorderWidth;
+    // Generate and shuffle IDs from 1 to 15
+    List<int> ids = List.generate(15, (index) => index + 1);
+    ids.shuffle();
+
+    // Triangle setup
+    double startX = tableWidth / 3.5 + tableBorderWidth;
+    double startY = 50 + tableBorderWidth;
     double radius = 15;
-    int rows = 5;
-    int id = 1;
+    int cols = 5;
+    int idIndex = 0;
 
-    for (int row = 0; row < rows; row++) {
-      for (int col = 0; col <= row; col++) {
+    for (int col = 0; col < cols; col++) {
+      for (int row = 0; row <= col; row++) {
+        if (idIndex >= ids.length) break; // Stop if all IDs are used
+
         balls.add(
           Ball(
             position: Offset(
-              startX + row * (radius * 1.8),
-              startY + col * (radius * 2) - row * radius,
+              startX + (col * (radius * 2)) - (row * radius),
+              startY + row * (radius * 1.8),
             ),
-            color: _getBallColor(id),
-            number: id,
+            color: _getBallColor(ids[idIndex]),
+            number: ids[idIndex],
           ),
         );
-        id++;
-        if (id > 15) break;
+        idIndex++;
       }
     }
   }
@@ -94,117 +103,64 @@ class PoolGameScreenState extends State<PoolGameScreen> {
   Color _getBallColor(int number) {
     if (number == 8) return Colors.black;
     if (number > 8) number -= 8;
-
     return Colors.primaries[number % Colors.primaries.length];
   }
 
   void _calculateTrajectory(Offset end) {
-    trajectoryPoints.clear();
+    if (cueBall == null) return;
 
-    // Make a copy of the current game state for simulation
-    List<Ball> simulatedBalls =
-        balls
-            .map(
-              (ball) => Ball(
-                position: ball.position,
-                velocity: ball.velocity,
-                color: ball.color,
-                isCue: ball.isCue,
-                number: ball.number,
-                radius: ball.radius,
-              ),
-            )
-            .toList();
+    setState(() {
+      trajectoryPoints.clear();
 
-    // Find the cue ball in our simulation
-    Ball cueBall = simulatedBalls.firstWhere((b) => b.isCue);
+      // Create a simulated cue ball for prediction
+      Ball simulatedCueBall = Ball(
+        position: cueBall!.position,
+        velocity: Offset.zero,
+        color: Colors.transparent,
+        isCue: true,
+        number: 0,
+      );
 
-    // Apply the same force we would in the real game
-    final direction = (cueBall.position - end);
-    final distance = direction.distance;
-    final power = min(distance / 100, 1.0);
-    final force = direction.normalized * power * 15;
-    cueBall.velocity = force;
-
-    // Simulate physics for a short time
-    for (int i = 0; i < maxTrajectoryPoints; i++) {
-      // Store current position
-      trajectoryPoints.add(cueBall.position);
+      final direction = (simulatedCueBall.position - end);
+      final force = direction.normalized * min(direction.distance / 100, 1.0) * 5;
+      simulatedCueBall.velocity = force;
 
       // Simulate movement
-      for (var ball in simulatedBalls) {
-        ball.position += ball.velocity;
-        ball.velocity *= 0.98; // friction
+      for (int i = 0; i < maxTrajectoryPoints; i++) {
+        trajectoryPoints.add(simulatedCueBall.position);
 
-        // Simple wall collisions
-        if (ball.position.dx < tableBorderWidth + ball.radius) {
-          ball.position = Offset(
-            tableBorderWidth + ball.radius,
-            ball.position.dy,
+        // Update position
+        simulatedCueBall.position += simulatedCueBall.velocity;
+        simulatedCueBall.velocity *= 0.92; // Friction
+
+        // Handle wall collisions
+        if (simulatedCueBall.position.dx < tableBorderWidth + simulatedCueBall.radius) {
+          simulatedCueBall.position = Offset(
+            tableBorderWidth + simulatedCueBall.radius,
+            simulatedCueBall.position.dy,
           );
-          ball.velocity = Offset(-ball.velocity.dx, ball.velocity.dy);
-        }
-        if (ball.position.dx > tableWidth + tableBorderWidth - ball.radius) {
-          ball.position = Offset(
-            tableWidth + tableBorderWidth - ball.radius,
-            ball.position.dy,
+          simulatedCueBall.velocity = Offset(
+            -simulatedCueBall.velocity.dx,
+            simulatedCueBall.velocity.dy,
           );
-          ball.velocity = Offset(-ball.velocity.dx, ball.velocity.dy);
         }
-        if (ball.position.dy < tableBorderWidth + ball.radius) {
-          ball.position = Offset(
-            ball.position.dx,
-            tableBorderWidth + ball.radius,
-          );
-          ball.velocity = Offset(ball.velocity.dx, -ball.velocity.dy);
-        }
-        if (ball.position.dy > tableHeight + tableBorderWidth - ball.radius) {
-          ball.position = Offset(
-            ball.position.dx,
-            tableHeight + tableBorderWidth - ball.radius,
-          );
-          ball.velocity = Offset(ball.velocity.dx, -ball.velocity.dy);
-        }
-      }
+        // Similar checks for other walls...
 
-      // Simple ball collisions (just for trajectory)
-      for (int i = 0; i < simulatedBalls.length; i++) {
-        for (int j = i + 1; j < simulatedBalls.length; j++) {
-          Ball a = simulatedBalls[i];
-          Ball b = simulatedBalls[j];
-
-          final dx = b.position.dx - a.position.dx;
-          final dy = b.position.dy - a.position.dy;
-          final dist = sqrt(dx * dx + dy * dy);
-          final minDist = a.radius + b.radius;
-
-          if (dist < minDist) {
-            final nx = dx / dist;
-            final ny = dy / dist;
-
-            // Simple bounce
-            a.velocity = Offset(
-              a.velocity.dx - nx * 1.5,
-              a.velocity.dy - ny * 1.5,
-            );
-            b.velocity = Offset(
-              b.velocity.dx + nx * 1.5,
-              b.velocity.dy + ny * 1.5,
-            );
-
-            // Stop tracking after first collision for performance
-            if (a.isCue || b.isCue) {
-              return;
-            }
+        // Check for ball collisions
+        for (var ball in balls) {
+          if (!ball.isCue &&
+              (simulatedCueBall.position - ball.position).distance <
+                  simulatedCueBall.radius + ball.radius) {
+            return; // Stop trajectory at first collision
           }
         }
       }
-    }
+    });
   }
 
   void _startMovement() {
     _timer?.cancel();
-    _timer = Timer.periodic(const Duration(milliseconds: 16), (timer) {
+    _timer = Timer.periodic(const Duration(milliseconds: 10), (timer) {
       setState(() {
         bool allStopped = true;
 
@@ -212,11 +168,9 @@ class PoolGameScreenState extends State<PoolGameScreen> {
           if (ball.velocity != Offset.zero) {
             allStopped = false;
             ball.position += ball.velocity;
+            ball.velocity *= 0.92; // Increased friction
 
-            // Apply friction
-            ball.velocity *= 0.98;
-
-            if (ball.velocity.distance < 0.1) {
+            if (ball.velocity.distance < 0.05) {
               ball.velocity = Offset.zero;
             }
           }
@@ -228,6 +182,7 @@ class PoolGameScreenState extends State<PoolGameScreen> {
         if (allStopped && balls.every((b) => b.velocity == Offset.zero)) {
           timer.cancel();
           isPlayerTurn = !isPlayerTurn;
+          cueBall ??= balls.firstWhereOrNull((b) => b.isCue);
         }
       });
     });
@@ -278,22 +233,15 @@ class PoolGameScreenState extends State<PoolGameScreen> {
         final minDist = a.radius + b.radius;
 
         if (dist < minDist) {
-          // Calculate collision normal
           final nx = dx / dist;
           final ny = dy / dist;
-
-          // Calculate relative velocity
           final vx = b.velocity.dx - a.velocity.dx;
           final vy = b.velocity.dy - a.velocity.dy;
           final relativeVelocity = (vx * nx + vy * ny);
 
-          // Only collide if moving toward each other
           if (relativeVelocity > 0) continue;
 
-          // Calculate impulse scalar
-          final impulse = 2.0 * relativeVelocity / 2.0;
-
-          // Apply impulse
+          final impulse = 0.7 * relativeVelocity / 2.0; // Reduced impulse
           a.velocity = Offset(
             a.velocity.dx - impulse * nx,
             a.velocity.dy - impulse * ny,
@@ -303,7 +251,6 @@ class PoolGameScreenState extends State<PoolGameScreen> {
             b.velocity.dy + impulse * ny,
           );
 
-          // Separate balls to avoid sticking
           final overlap = (minDist - dist) / 2.0;
           a.position = Offset(
             a.position.dx - overlap * nx,
@@ -322,15 +269,14 @@ class PoolGameScreenState extends State<PoolGameScreen> {
     List<Ball> toRemove = [];
 
     for (var ball in balls) {
+      print('yaha hai:$ball');
       for (var pocket in pockets) {
         if ((ball.position - pocket).distance < pocketRadius) {
           toRemove.add(ball);
 
           if (ball.isCue) {
-            // Cue ball pocketed - foul
             _resetCueBall();
           } else {
-            // Score points
             if (isPlayerTurn) {
               playerScore += ball.number == 8 ? 10 : 1;
             } else {
@@ -350,24 +296,35 @@ class PoolGameScreenState extends State<PoolGameScreen> {
   }
 
   void _resetCueBall() {
-    final cueBall = balls.firstWhere((b) => b.isCue);
-    cueBall.position = Offset(
-      tableBorderWidth + 100,
-      tableHeight / 2 + tableBorderWidth,
-    );
-    cueBall.velocity = Offset.zero;
+    if (cueBall == null) {
+      cueBall = Ball(
+        position: Offset(
+          tableBorderWidth + 100,
+          tableHeight / 2 + tableBorderWidth,
+        ),
+        color: Colors.white,
+        isCue: true,
+        number: 0,
+      );
+      balls.add(cueBall!);
+    } else {
+      cueBall!.position = Offset(
+        tableBorderWidth + 100,
+        tableHeight / 2 + tableBorderWidth,
+      );
+      cueBall!.velocity = Offset.zero;
+    }
   }
 
   void _hitCueBall(Offset end) {
-    if (!isPlayerTurn) return;
+    if (!isPlayerTurn || cueBall == null) return;
 
-    final cueBall = balls.firstWhere((b) => b.isCue);
-    final direction = (cueBall.position - end);
+    final direction = (cueBall!.position - end);
     final distance = direction.distance;
-    final power = min(distance / 100, 1.0); // Limit max power
-    final force = direction.normalized * power * 15;
+    final power = min(distance / 100, 1.0);
+    final force = direction.normalized * power * 5; // Reduced force
 
-    cueBall.velocity = force;
+    cueBall!.velocity = force;
     _startMovement();
   }
 
@@ -379,172 +336,174 @@ class PoolGameScreenState extends State<PoolGameScreen> {
 
   @override
   Widget build(BuildContext context) {
-    if (tableWidth == 0) {
+    if (!gameInitialized) {
       return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
-    Ball cueBall = balls.firstWhere((b) => b.isCue);
+    if (cueBall == null) {
+      return const Scaffold(
+        body: Center(child: Text("Game error: No cue ball")),
+      );
+    }
+
     bool canShoot =
         isPlayerTurn && balls.every((b) => b.velocity == Offset.zero);
 
     return Scaffold(
-      body: Container(
-        decoration: BoxDecoration(color: Colors.brown[800]),
-        child: Stack(
-          children: [
-            // Table border (wooden rails)
-            Positioned(
-              left: 0,
-              top: 0,
-              right: 0,
-              bottom: 0,
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.brown[400],
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                margin: EdgeInsets.all(tableBorderWidth / 2),
-              ),
+      body: Center(
+        child: Container(
+          height: 650,
+          decoration: BoxDecoration(color: Colors.brown[800]),
+          child: Container(
+            decoration: BoxDecoration(
+              color: Colors.brown[400],
+              borderRadius: BorderRadius.circular(10),
             ),
-
-            // Table surface
-            Positioned(
-              left: tableBorderWidth,
-              top: tableBorderWidth,
-              right: tableBorderWidth,
-              bottom: tableBorderWidth,
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Colors.green[800],
-                  borderRadius: BorderRadius.circular(5),
-                ),
-              ),
-            ),
-
-            // Pockets
-            ...pockets.map(
-              (pocket) => Positioned(
-                left: pocket.dx - pocketRadius,
-                top: pocket.dy - pocketRadius,
-                child: Container(
-                  width: pocketRadius * 2,
-                  height: pocketRadius * 2,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: Colors.black,
+            margin: EdgeInsets.all(tableBorderWidth *0.5),
+            child: Stack(
+              children: [
+                // Table surface
+                Positioned(
+                  left: tableBorderWidth,
+                  top: tableBorderWidth,
+                  right: tableBorderWidth,
+                  bottom: tableBorderWidth,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: Colors.green[800],
+                      borderRadius: BorderRadius.circular(5),
+                    ),
                   ),
                 ),
-              ),
-            ),
-
-            // Balls
-            ...balls.map(
-              (ball) => Positioned(
-                left: ball.position.dx - ball.radius,
-                top: ball.position.dy - ball.radius,
-                child: Container(
-                  width: ball.radius * 2,
-                  height: ball.radius * 2,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: ball.color,
-                    border: Border.all(color: Colors.black),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.3),
-                        blurRadius: 5,
-                        offset: Offset(2, 2),
+                // Pockets
+                ...pockets.map(
+                  (pocket) => Positioned(
+                    left: pocket.dx - pocketRadius,
+                    top: pocket.dy - pocketRadius,
+                    child: Container(
+                      width: pocketRadius * 1,
+                      height: pocketRadius * 1,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Colors.black,
                       ),
-                    ],
-                  ),
-                  child:
-                      ball.number > 0
-                          ? Center(
-                            child: Text(
-                              ball.number.toString(),
-                              style: TextStyle(
-                                color:
-                                    ball.color.computeLuminance() > 0.5
-                                        ? Colors.black
-                                        : Colors.white,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          )
-                          : null,
-                ),
-              ),
-            ),
-
-            // Trajectory prediction line
-            if (aimStart != null && canShoot)
-              CustomPaint(
-                painter: TrajectoryPainter(trajectoryPoints),
-                size: Size.infinite,
-              ),
-
-            // Aiming line
-            if (aimStart != null && canShoot)
-              CustomPaint(
-                painter: CueLinePainter(
-                  start: cueBall.position,
-                  end: aimStart!,
-                  power: (cueBall.position - aimStart!).distance,
-                ),
-                size: Size.infinite,
-              ),
-
-            // Score display
-            Positioned(
-              top: 20,
-              left: 0,
-              right: 0,
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
-                children: [
-                  Text(
-                    'Player: $playerScore',
-                    style: TextStyle(
-                      color: isPlayerTurn ? Colors.yellow : Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
                     ),
                   ),
-                  Text(
-                    'Opponent: $opponentScore',
-                    style: TextStyle(
-                      color: !isPlayerTurn ? Colors.yellow : Colors.white,
-                      fontSize: 20,
-                      fontWeight: FontWeight.bold,
+                ),
+                // Balls
+                ...balls.map(
+                  (ball) => Positioned(
+                    left: ball.position.dx - ball.radius,
+                    top: ball.position.dy - ball.radius,
+                    child: Container(
+                      width: ball.radius * 2,
+                      height: ball.radius * 2,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: ball.color,
+                        border: Border.all(color: Colors.black),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.3),
+                            blurRadius: 5,
+                            offset: Offset(2, 2),
+                          ),
+                        ],
+                      ),
+                      child:
+                          ball.number > 0
+                              ? Center(
+                                child: Text(
+                                  ball.number.toString(),
+                                  style: TextStyle(
+                                    color:
+                                        ball.color.computeLuminance() > 0.5
+                                            ? Colors.black
+                                            : Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              )
+                              : null,
                     ),
                   ),
-                ],
-              ),
+                ),
+                // Trajectory prediction line
+                // In your Stack widget, make sure this is always visible when aiming:
+                if (aimStart != null && canShoot && trajectoryPoints.isNotEmpty)
+                  CustomPaint(
+                    painter: TrajectoryPainter(trajectoryPoints),
+                    size: Size.infinite,
+                  ),
+                // Aiming line
+                if (aimStart != null && canShoot)
+                  CustomPaint(
+                    painter: CueLinePainter(
+                      start: cueBall!.position,
+                      end: aimStart!,
+                      power: (cueBall!.position - aimStart!).distance,
+                    ),
+                    size: Size.infinite,
+                  ),
+                // Score display
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    Text(
+                      'Player: $playerScore',
+                      style: TextStyle(
+                        color: isPlayerTurn ? Colors.yellow : Colors.white,
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    Text(
+                      'Opponent: $opponentScore',
+                      style: TextStyle(
+                        color: !isPlayerTurn ? Colors.yellow : Colors.white,
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+                // Controls
+                // Replace the existing GestureDetector in your build method with this:
+                if (canShoot && cueBall != null)
+                  Positioned.fill(
+                    child: GestureDetector(
+                      onPanStart: (details) {
+                        // Check if touch is near cue ball
+                        if ((details.localPosition - cueBall!.position).distance <= cueBall!.radius * 2) {
+                          setState(() {
+                            aimStart = details.localPosition;
+                            _calculateTrajectory(details.localPosition);
+                          });
+                        }
+                      },
+                      onPanUpdate: (details) {
+                        if (aimStart != null) {
+                          setState(() {
+                            aimStart = details.localPosition;
+                            _calculateTrajectory(details.localPosition);
+                          });
+                        }
+                      },
+                      onPanEnd: (_) {
+                        if (aimStart != null) {
+                          _hitCueBall(aimStart!);
+                          setState(() {
+                            aimStart = null;
+                            trajectoryPoints.clear();
+                          });
+                        }
+                      },
+                      behavior: HitTestBehavior.translucent,
+                    ),
+                  ),
+              ],
             ),
-
-            // Controls
-            if (canShoot)
-              GestureDetector(
-                onPanStart: (details) {
-                  aimStart = details.localPosition;
-                  _calculateTrajectory(details.localPosition);
-                },
-                onPanUpdate: (details) {
-                  setState(() {
-                    aimStart = details.localPosition;
-                    _calculateTrajectory(details.localPosition);
-                  });
-                },
-                onPanEnd: (_) {
-                  if (aimStart != null) {
-                    _hitCueBall(aimStart!);
-                    aimStart = null;
-                    trajectoryPoints.clear();
-                  }
-                },
-                behavior: HitTestBehavior.translucent,
-              ),
-          ],
+          ),
         ),
       ),
     );
@@ -590,12 +549,9 @@ class CueLinePainter extends CustomPainter {
           ..strokeWidth = 4
           ..strokeCap = StrokeCap.round;
 
-    // Draw power indicator (red part)
     final powerLength = min(power, 100);
     final powerEnd = start + (end - start).normalized * powerLength.toDouble();
     canvas.drawLine(start, powerEnd, powerPaint);
-
-    // Draw aiming line (white part)
     canvas.drawLine(start, end, linePaint);
   }
 
@@ -618,21 +574,17 @@ class TrajectoryPainter extends CustomPainter {
           ..strokeWidth = 2
           ..strokeCap = StrokeCap.round;
 
-    // Draw dashed line
     for (int i = 0; i < points.length - 1; i++) {
       if (i % 2 == 0) {
-        // Make it dashed
         canvas.drawLine(points[i], points[i + 1], paint);
       }
     }
 
-    // Draw arrow at the end
     if (points.length > 1) {
       final last = points.last;
       final secondLast = points[points.length - 2];
       final angle = atan2(last.dy - secondLast.dy, last.dx - secondLast.dx);
 
-      // Draw arrow head
       canvas.save();
       canvas.translate(last.dx, last.dy);
       canvas.rotate(angle);
@@ -662,4 +614,13 @@ class TrajectoryPainter extends CustomPainter {
 
 extension OffsetExtension on Offset {
   Offset get normalized => distance > 0 ? this / distance : Offset.zero;
+}
+
+extension FirstWhereOrNullExtension<E> on Iterable<E> {
+  E? firstWhereOrNull(bool Function(E) test) {
+    for (E element in this) {
+      if (test(element)) return element;
+    }
+    return null;
+  }
 }
